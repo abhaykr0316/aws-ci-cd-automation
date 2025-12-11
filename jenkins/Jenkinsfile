@@ -1,0 +1,58 @@
+pipeline {
+    agent any
+    environment {
+        AWS_REGION = 'us-east-1'
+        AWS_ACCOUNT_ID = '<AWS_ACCOUNT_ID>' //replace
+        ECR_REPO = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/abhaykr0316/aws-ci-cd-automation" // my-repo
+        IMAGE_TAG = "${GIT_COMMIT}"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker --version'
+                script {
+                    image = docker.build("${ECR_REPO}:${IMAGE_TAG}")
+                }
+            }
+        }
+        stage('ECR Login') {
+            steps {
+                withCredentials([usernamePassword(credentialsID: 'aws-cred', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    sh """
+                      aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                      aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                      aws configure set default.region ${AWS_REGION}
+                      aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    """
+                }
+            }
+        }
+        stage('Push to ECR') {
+            steps {
+                sh "docker push ${ECR_REPO}:${IMAGE_TAG}"
+            }
+        }
+        stage('Update ECS Service') {
+            steps {
+                withCredentials([usernamePassword(credentialsID: 'aws-cred', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    sh """
+                      aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                      aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                      aws configure set default.region ${AWS_REGION}
+                      # Force new deployment (replace cluster & service names with outputs from Terraform)
+                      aws ecs update-service --cluster aws-ci-cd-automation --service aws-ci-cd-automation-service --force-new-deployment
+                    """
+                }
+            }
+        }
+    }
+    post {
+        success { echo "Pipeline finished SUCCESSFULLY!" }
+        failure { echo "Pipeline FAILED!" }
+    }
+}
